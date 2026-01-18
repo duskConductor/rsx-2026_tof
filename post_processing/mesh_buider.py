@@ -21,8 +21,8 @@ def create_mesh_from_csv():
 
             # NOTE: Distance can't be negative;  330mm is around 12 inches; the plate has a diameter of 12 inches
             # We shouldn't get anything less than 0 or anything more than 12 inches
-            #if d > 0 and d < 330:
-            if d > 0 and d < 4000:
+            if d > 0 and d < 700:
+            # if d > 0 and d < 2000:
                 angle_x = np.radians((j - res/2 + 0.5) * (fov_deg / res))
                 angle_y = np.radians((i - res/2 + 0.5) * (fov_deg / res))
 
