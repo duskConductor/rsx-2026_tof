@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 import open3d as o3d
 
 CSV_PATH = "tof_data.csv"
@@ -38,6 +39,13 @@ def create_mesh_from_csv():
 
     pcd.estimate_normals()
     mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
+    densities = np.asarray(densities)
+
+    densities_normalized = (densities - densities.min()) / (densities.max() - densities.min())
+
+    colour_map = plt.get_cmap("plasma")
+    mesh_colours = colour_map(densities_normalized)[:, :3]
+    mesh.vertex_colors = o3d.utility.Vector3dVector(mesh_colours)
 
     print("Displaying mesh...")
 
