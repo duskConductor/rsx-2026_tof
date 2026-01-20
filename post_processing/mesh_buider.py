@@ -38,7 +38,7 @@ def create_mesh_from_csv():
     pcd.points = o3d.utility.Vector3dVector(np.array(points))
 
     pcd.estimate_normals()
-    mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
+    mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=10)
     densities = np.asarray(densities)
 
     densities_normalized = (densities - densities.min()) / (densities.max() - densities.min())
