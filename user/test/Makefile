@@ -32,12 +32,19 @@ INCLUDE_PATH = $(CORE_INCLUDE_PATHS) $(PLATFORM_INCLUDE_PATHS) $(EXAMPLES_INCLUD
 
 CFLAGS = $(BASE_CFLAGS) $(CFLAGS_RELEASE) $(INCLUDE_PATH)
 
-all:
-	$(CC) $(CFLAGS) $(LIB_FLAGS) -o menu ./menu.c $(LIB_SOURCES)
+LIB_FLAGS = -lgpiod -lm
+
+all: multichannel
+# 	$(CC) $(CFLAGS) $(LIB_FLAGS) -o menu ./menu.c $(LIB_SOURCES)
+
+multichannel: multichannel.c $(LIB_SOURCES)
+	$(CC) $(CFLAGS) $(LIB_FLAGS) -o multichannel ./multichannel.c $(LIB_SOURCES)
+
 
 ifeq ($(findstring SPI,$(CFLAGS_RELEASE)),SPI)
 	$(CC) $(CFLAGS) $(LIB_FLAGS) -o multi ./multi_ranging.c $(LIB_SOURCES)
 endif
 
 clean:
-	rm -f menu multi
+	rm -f menu multi multichannel
+# 	rm -f menu multi
