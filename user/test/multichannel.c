@@ -8,17 +8,16 @@
 #include <gpiod.h>
 #include <fcntl.h>
 #include <signal.h>
-
-// Include the STMicroelectronics ULD API header file
 #include "vl53l8cx_api.h"
 
-// --- Configuration ---
 #define I2C_BUS_PATH "/dev/i2c-1"
+// Temporary Parameter; won't be there for actual program
 #define SCAN_DURATION_SECONDS 180
+// Where we're saving the data
 #define CSV_FILENAME "multichannel_lidar_scan.csv"
 
 #define NUM_SENSORS 4
-#define LED_BCM_PIN 9 // Corresponds to Physical Pin 21
+#define LED_BCM_PIN 9
 
 // Physical Pins & Corresponding BCM Pins
 // 29 (Zwicky) -> BCM 5
@@ -26,27 +25,27 @@
 // 26 (Brahe) -> BCM 7
 // 24 (Copernicus) -> BCM 8
 
-// C requires the use of Broadcom pins for gpiod functions
+// NOTE: C requires the use of Broadcom pins for gpiod functions
 const int LPN_BCM_PINS[] = {5, 6, 7, 8};
 // I2C Addresses for the sensors
 const uint8_t I2C_ADDRESSES[] = {0x29, 0x2A, 0x2B, 0x2C};
 // Sensor names for CSV header
 const char *SENSOR_NAMES[] = {"Zwicky", "Aristotle", "Brahe", "Copernicus"};
 
-// GPIO handles
+// Setting up the GPIO Lines
 struct gpiod_chip *chip;
 struct gpiod_line *lpn_lines[NUM_SENSORS];
 struct gpiod_line *led_line;
-
-// Sensor device handles
 VL53L8CX_Configuration sensors[NUM_SENSORS];
 
-// --- Signal Handler and Cleanup ---
+// Used when closing the program
+void cleanup();
 
+// Closing out of the program
 void cleanup() {
     printf("\nPerforming cleanup...\n");
 
-    // Shut down all LPn lines and stop ranging
+    // Shut down all LPn lines and stop range detection
     for (int i = 0; i < NUM_SENSORS; i++){
         vl53l8cx_stop_ranging(&sensors[i]);
 
@@ -71,7 +70,7 @@ void cleanup() {
         gpiod_chip_close(chip);
     }
 
-    printf("Cleanup complete. Exiting.\n");
+    printf("Done cleaning up! Good night!!\n");
 
     exit(0);
 }
