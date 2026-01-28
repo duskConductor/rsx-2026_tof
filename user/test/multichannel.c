@@ -38,10 +38,18 @@ struct gpiod_line *lpn_lines[NUM_SENSORS];
 struct gpiod_line *led_line;
 VL53L8CX_Configuration sensors[NUM_SENSORS];
 
-// Used when closing the program
+// Cleans up system to ensure nothing assigned out of place
 void cleanup();
+// Used when starting the program (cleans up before assigning stuff); used by signal
+void signal_handler(int sig);
+// Assigns pins out at start of program
+void setup_gpio();
+// Assigns addresses to the sensors (all start with default address)
+void setup_sensors();
+// Actually does the 8x8 LiDAR scan
+void run_scan();
 
-// Closing out of the program
+// Ensures there's no leftover assignments
 void cleanup() {
     printf("\nPerforming cleanup...\n");
 
@@ -75,6 +83,8 @@ void cleanup() {
     exit(0);
 }
 
+
+// Cleans system up before assignments
 void signal_handler(int sig) {
     cleanup();
 }
@@ -100,6 +110,7 @@ void setup_gpio() {
     gpiod_line_request_output(led_line, "led", 0);
 }
 
+// Sets addresses and prepares sensors
 void setup_sensors() {
     printf("Starting sensor startup sequence...\n");
 
@@ -159,6 +170,7 @@ void setup_sensors() {
     printf("All sensors configured.\n");
 }
 
+// Actually scans
 void run_scan(){
     // Toggle on LED; we're starting the scan
     gpiod_line_set_value(led_line, 1); 
@@ -225,6 +237,7 @@ void run_scan(){
     printf("LED OFF: Scan complete.\n");
 }
 
+// Main code
 int main() {
     signal(SIGINT, signal_handler);
     setup_gpio();
