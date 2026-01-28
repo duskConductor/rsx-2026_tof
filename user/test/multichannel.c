@@ -173,14 +173,17 @@ void run_scan(){
         cleanup();
     }
 
-    fprintf(csvfile, "Timestamp_s");
-    for (int s = 0; s < NUM_SENSORS; s++){
-        for (int z_idx = 0; z_idx < 64; z_idx++){
-            // "Timestamp_s, Aristotle_Z1_Dist_mm, Aristotle_Z1_Status"
-            fprintf(csvfile, ",%s_Z%d_Dist_mm,%s_Z%d_Status", SENSOR_NAMES[s], z_idx, SENSOR_NAMES[s], z_idx);
-        }
-    }
-    fprintf(csvfile, "\n");
+    fprintf(csvfile, "Timestamp_s,Sensor_Name,Zone,Distance_mm,Signal_Strength,Status\n");
+
+    // fprintf(csvfile, "Timestamp_s");
+    // for (int s = 0; s < NUM_SENSORS; s++){
+    //     for (int z_idx = 0; z_idx < 64; z_idx++){
+    //         // "Timestamp_s, Aristotle_Z1_Dist_mm, Aristotle_Z1_Status"
+    //         // fprintf(csvfile, ",%s_Z%d_Dist_mm,%s_Z%d_Status", SENSOR_NAMES[s], z_idx, SENSOR_NAMES[s], z_idx);
+            
+    //     }
+    // }
+    // fprintf(csvfile, "\n");
 
     // Start all sensors in autonomous ranging mode
     for (int i = 0; i < NUM_SENSORS; i++) {
