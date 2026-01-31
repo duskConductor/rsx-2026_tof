@@ -26,6 +26,7 @@ Need to add this to enable the CAN hat:
 dtparam=spi=on
 dtoverlay=mcp2515,spi1-1,oscillator=16000000,interrupt=22
 dtoverlay=mcp2515,spi1-2,oscillator=16000000,interrupt=13
+force_eeprom_read=0
 ```
 
 ## Install can-utils
