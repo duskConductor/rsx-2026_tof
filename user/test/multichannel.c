@@ -14,7 +14,7 @@
 #include "platform.h"
 
 #define NUM_SENSORS 4
-
+#define STATUS_LED_BCM 9
 
 static volatile int g_stop = 0;
 
@@ -26,6 +26,7 @@ static const char *SENSOR_NAMES[NUM_SENSORS] = {"Zwicky", "Aristotle", "Brahe", 
 
 static struct gpiod_chip *gpio_chip = NULL;
 static struct gpiod_line *lp_lines[NUM_SENSORS] = {0};
+static struct gpiod_line *status_led_line = NULL;
 
 typedef struct {
     VL53L8CX_Configuration dev;
@@ -61,6 +62,19 @@ static int gpio_init_outputs(void)
         }
     }
 
+    // NOTE: LED
+    status_led_line = gpiod_chip_get_line(gpio_chip, STATUS_LED_BCM);
+
+    if (!status_led_line) {
+        fprintf(stderr, "Failed to get line for status LED BCM %d\n", STATUS_LED_BCM);
+        return -1;
+    }
+
+    if (gpiod_line_request_output(status_led_line, "vl53l8cx_status_led", 0) < 0) {
+        fprintf(stderr, "Failed to request output for status LED BCM %d\n", STATUS_LED_BCM);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -74,14 +88,27 @@ static void gpio_set_lp(int sensor_idx, int value)
     }
 }
 
+static void set_status_led(int on)
+{
+    if (!status_led_line) return;
+    gpiod_line_set_value(status_led_line, on ? 1 : 0);
+}
+
 static void gpio_cleanup(void)
 {
+    if (status_led_line){
+        gpiod_line_set_value(status_led_line, 0);
+        gpiod_line_release(status_led_line);
+        status_led_line = NULL;
+    }
+
     for (int i = 0; i < NUM_SENSORS; ++i) {
         if (lp_lines[i]) {
             gpiod_line_release(lp_lines[i]);
             lp_lines[i] = NULL;
         }
     }
+    
     if (gpio_chip) {
         gpiod_chip_close(gpio_chip);
         gpio_chip = NULL;
@@ -93,6 +120,7 @@ static void stop_all_sensors(void){
         vl53l8cx_stop_ranging(&sensors[i].dev);
         gpio_set_lp(i, 0);
     }
+    set_status_led(0);
     usleep(20000);
 }
 
@@ -144,6 +172,7 @@ static int init_one_sensor(Vl53l8cxSensor *s, uint8_t new_addr7)
     }
 
     printf("[%s] initialised at 0x%02X\n", s->name, s->i2c_addr7);
+    set_status_led(1);
     return VL53L8CX_STATUS_OK;
 }
 
