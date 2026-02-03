@@ -44,6 +44,8 @@ const int LPN_BCM_PINS[] = {5, 6, 7, 8};
 const uint8_t I2C_ADDRESSES[] = {0x29, 0x2A, 0x2B, 0x2C};
 // Sensor names for CSV header
 const char *SENSOR_NAMES[] = {"Zwicky", "Aristotle", "Brahe", "Copernicus"};
+int sensor_fds[NUM_SENSORS];
+extern int i2c_fd;
 
 // Setting up the GPIO Lines
 struct gpiod_chip *chip;
@@ -100,15 +102,18 @@ void cleanup() {
 
     // Shut down all LPn lines and stop range detection
     for (int i = 0; i < NUM_SENSORS; i++){
-        vl53l8cx_stop_ranging(&sensors[i]);
+        if (sensor_fds[i] > 0) {
+            vl53l8cx_stop_ranging(&sensors[i]);
+        }
 
         if (lpn_lines[i]){
             gpiod_line_set_value(lpn_lines[i], 0); 
             gpiod_line_release(lpn_lines[i]);
         }
         // Close the I2C file descriptor
-        if (sensors[i].platform.i2c_bus_fd >= 0) {
-            close(sensors[i].platform.i2c_bus_fd);
+        if (sensor_fds[i] >= 0) {
+            close(sensor_fds[i]);
+            sensor_fds[i] = -1;
         }
     }
 
@@ -160,6 +165,7 @@ void setup_sensors() {
     printf("Starting sensor startup sequence...\n");
 
     for (int i = 0; i < NUM_SENSORS; i++) {
+        sensor_fds[i] = -1;
         gpiod_line_set_value(lpn_lines[i], 0);
     }
 
@@ -173,14 +179,16 @@ void setup_sensors() {
         // Boot delay 100ms
         usleep(100000);
 
-        // Default address is 0x29 (7-bit)
-        sensors[i].platform.i2c_address = 0x52 >> 1; 
-        sensors[i].platform.i2c_bus_fd = open(I2C_BUS_PATH, O_RDWR);
-
-        if (sensors[i].platform.i2c_bus_fd < 0) {
+        // Open the I2C bus and store the descriptor in our global array
+        int fd = open(I2C_BUS_PATH, O_RDWR);
+        if (fd < 0) {
             perror("Failed to open I2C bus");
             cleanup();
         }
+        sensor_fds[i] = fd;
+
+        // Default address is 0x29 (7-bit)
+        sensors[i].platform.address = 0x52; 
 
         // Initialize all of the sensors (loads firmware)
         uint8_t status = vl53l8cx_init(&sensors[i]);
@@ -190,27 +198,25 @@ void setup_sensors() {
         }
 
         // Change I2C addresses for Aristotle, Brahe, Copernicus
-        if (I2C_ADDRESSES[i] != (0x52 >> 1)) {
-            // API function requires 8-bit address (e.g. 0x54)
-            status = vl53l8cx_set_i2c_address(&sensors[i], I2C_ADDRESSES[i] << 1);
-
+        uint8_t new_address_8bit = I2C_ADDRESSES[i] << 1;
+        if (new_address_8bit != 0x52) {
+            status = vl53l8cx_set_i2c_address(&sensors[i], new_address_8bit);
             if (status != VL53L8CX_STATUS_OK) {
                 printf("Sensor %d address change failed with status %d\n", i, status);
                 cleanup();
             }
-
-            // Update the local device structure with the new 7-bit address
-            sensors[i].platform.i2c_address = I2C_ADDRESSES[i];
+            // Update the platform struct with the new 8-bit address
+            sensors[i].platform.address = new_address_8bit;
         }
 
         // Set the device to 8x8
-        status = vl53l8cx_set_resolution(&sensors[i], 1);
+        status = vl53l8cx_set_resolution(&sensors[i], VL53L8CX_RESOLUTION_8X8);
         if (status != VL53L8CX_STATUS_OK) {
             printf("Sensor %d resolution set failed with status %d\n", i, status);
             cleanup();
         }
 
-        printf("Configured %s (%d) with address 0x%02X\n", SENSOR_NAMES[i], i, I2C_ADDRESSES[i]);
+        printf("Configured %s (%d) with address 0x%02X\n", SENSOR_NAMES[i], i, sensors[i].platform.address);
     }
     printf("All sensors configured.\n");
 }
@@ -246,6 +252,7 @@ void run_scan(){
         for (int i = 0; i < NUM_SENSORS; i++) {
             uint8_t data_ready = 0;
             VL53L8CX_ResultsData results;
+            i2c_fd = sensor_fds[i];
 
             // Polling
             int attempts = 0;
