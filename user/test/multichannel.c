@@ -3,12 +3,25 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <math.h>
 #include <sys/ioctl.h>
 #include <linux/i2c-dev.h>
 #include <gpiod.h>
 #include <fcntl.h>
 #include <signal.h>
 #include "vl53l8cx_api.h"
+
+/*
+  Don't forget! 
+  Edit /boot/config.txt
+    dtparam=i2c_arm=on
+    dtparam=i2c_arm_baudrate=400000
+ */
+
+typedef struct {
+    float x_off, y_off, z_off;
+    float yaw;
+} SensorRig;
 
 #define I2C_BUS_PATH "/dev/i2c-1"
 // Temporary Parameter; won't be there for actual program
@@ -38,16 +51,48 @@ struct gpiod_line *lpn_lines[NUM_SENSORS];
 struct gpiod_line *led_line;
 VL53L8CX_Configuration sensors[NUM_SENSORS];
 
+SensorRig rig[NUM_SENSORS] = {
+    {0,68.7,0,0}, // Zwicky - Top
+    {0,45.8,0,0}, // Aristotle - Second from top
+    {0,22.9,0,0}, // Brahe - Third from top
+    {0,0,0,0} // Copernicus - Bottom
+};
+
+void calculate_cartesian(int zone, uint32_t dist, float *gx, float *gy, float *gz, int s_idx) {
+    if (dist == 0) {
+        *gx = *gy = *gz = 0;
+        return;
+    }
+
+    // NOTE: We're using an 8x8 grid
+    // FOV is a 45 degree square
+    // Each zone is around 5.6 degrees
+    // The center of the grid is 3.5.
+    float az = ((zone % 8) - 3.5f) * 5.625f * (M_PI / 180.0f);
+    float el = (3.5f - (zone / 8)) * 5.625f * (M_PI / 180.0f);
+
+    // Local coordinates (z is forward)
+    float lx = dist * sinf(az);
+    float ly = dist * sinf(el);
+    float lz = dist * cosf(az) * cosf(el);
+
+    // Rig Tansformation: Yaw rotation + Translation)
+    float rad_yaw = rig[s_idx].yaw * (M_PI / 180.0f);
+    *gx = rig[s_idx].x_off + (lx * cosf(rad_yaw) + lz * sinf(rad_yaw));
+    *gy = rig[s_idx].y_off + ly;
+    *gz = rig[s_idx].z_off + (-lx * sinf(rad_yaw) + lz * cosf(rad_yaw));
+};
+
 // Cleans up system to ensure nothing assigned out of place
-void cleanup();
+// void cleanup();
 // Used when starting the program (cleans up before assigning stuff); used by signal
-void signal_handler(int sig);
+// void signal_handler(int sig);
 // Assigns pins out at start of program
-void setup_gpio();
+// void setup_gpio();
 // Assigns addresses to the sensors (all start with default address)
-void setup_sensors();
+// void setup_sensors();
 // Actually does the 8x8 LiDAR scan
-void run_scan();
+// void run_scan();
 
 // Ensures there's no leftover assignments
 void cleanup() {
@@ -176,7 +221,6 @@ void run_scan(){
     gpiod_line_set_value(led_line, 1); 
     printf("LED ON: Initializing scan\n");
 
-    time_t start_time = time(NULL);
     FILE *csvfile = fopen(CSV_FILENAME, "w");
 
     if (!csvfile) {
@@ -184,51 +228,53 @@ void run_scan(){
         cleanup();
     }
 
-    fprintf(csvfile, "Timestamp_s,Sensor_Name,Zone,Distance_mm,Signal_Strength,Status\n");
+    fprintf(csvfile, "Timestamp_s,Sensor,Zone,Distance_mm,Signal,Status,X,Y,Z\n");
 
-    // fprintf(csvfile, "Timestamp_s");
-    // for (int s = 0; s < NUM_SENSORS; s++){
-    //     for (int z_idx = 0; z_idx < 64; z_idx++){
-    //         // "Timestamp_s, Aristotle_Z1_Dist_mm, Aristotle_Z1_Status"
-    //         // fprintf(csvfile, ",%s_Z%d_Dist_mm,%s_Z%d_Status", SENSOR_NAMES[s], z_idx, SENSOR_NAMES[s], z_idx);
-            
-    //     }
-    // }
-    // fprintf(csvfile, "\n");
+    time_t start_time = time(NULL);
 
-    // Start all sensors in autonomous ranging mode
-    for (int i = 0; i < NUM_SENSORS; i++) {
-        vl53l8cx_start_ranging(&sensors[i]);
-    }
+    while ((time(NULL) - start_time) < SCAN_DURATION_SECONDS){
+        long ts = (long)(time(NULL) - start_time);
 
-    VL53L8CX_ResultsData results;
-    uint8_t data_ready = 0;
-
-    // Currently it's just using the clock to scan for a predetermined time
-    while ((time(NULL) - start_time) < SCAN_DURATION_SECONDS) {
-        fprintf(csvfile, "%ld", (long)(time(NULL) - start_time));
-
-        // Polling I2C line sequentially
+        // Start ranging on all sensors
+        // Turn them on sequentially; ensure they're not all
+        // ranging at the same interval; helps prevent interference
         for (int i = 0; i < NUM_SENSORS; i++) {
+            vl53l8cx_start_ranging(&sensors[i]);
+        }
+
+        // Actually sensing stuff
+        for (int i = 0; i < NUM_SENSORS; i++) {
+            uint8_t data_ready = 0;
+            VL53L8CX_ResultsData results;
+
+            // Polling
+            int attempts = 0;
             do {
                 vl53l8cx_check_data_ready(&sensors[i], &data_ready);
-                usleep(100); // Sleep 100 microseconds
-            } while (!data_ready);
 
-            vl53l8cx_get_ranging_data(&sensors[i], &results);
+                if (!data_ready) {
+                    usleep(500);
+                }
 
-            for (int j = 0; j < 64; j++){
-                if (results.nb_target_detected[j] > 0) {
-                    fprintf(csvfile, ",%d,%d", results.distance_mm[j], results.target_status[j]);
-                } else {
-                    fprintf(csvfile, ",0,0");
+            } while (!data_ready && attempts++ < 100);
+
+            if (data_ready) {
+                vl53l8cx_get_ranging_data(&sensors[i], &results);
+
+                for (int j = 0; j < 64; j++) {
+                    if (results.nb_target_detected[j] > 0) {
+                        float x, y, z;
+                        calculate_cartesian(j, results.distance_mm[j], &x, &y, &z, i);
+                        fprintf(csvfile, "%ld,%s,%d,%u,%u,%d,%.2f,%.2f,%.2f\n", 
+                                ts, SENSOR_NAMES[i], j, results.distance_mm[j], 
+                                (uint32_t)results.signal_per_spad[j], 
+                                results.target_status[j], x, y, z);
+                    }
                 }
             }
-
-            // Delay after reading one sensor's data (1 millisecond)
-            usleep(1000);
+            // Stop ranging to get a true "single-shot software sync"
+            vl53l8cx_stop_ranging(&sensors[i]);
         }
-        fprintf(csvfile, "\n");
     }
 
     // Close CSV file, turn off LED, we're stopping the scan

@@ -14,9 +14,13 @@ EXAMPLES_INCLUDE_PATHS = -I../examples
 
 BASE_CFLAGS = -Wall -Werror -Wno-missing-braces
 CFLAGS_RELEASE = -Os -g0
-CFLAGS_RELEASE += -DSTMVL53L8CX_KERNEL
+
+CFLAGS = $(BASE_CFLAGS) $(CFLAGS_RELEASE) $(INCLUDE_PATH)
+# CFLAGS_RELEASE += -DSTMVL53L8CX_KERNEL
 #CFLAGS_RELEASE += -DSPI
 #CFLAGS_RELEASE += STMVL53L8CX_KERNEL
+
+# LIB_FLAGS = -lgpiod -lm
 
 LIB_CORE_SOURCES =\
 	$(wildcard ../uld-driver/src/*.c)
@@ -38,13 +42,13 @@ all: multichannel
 # 	$(CC) $(CFLAGS) $(LIB_FLAGS) -o menu ./menu.c $(LIB_SOURCES)
 
 multichannel: multichannel.c $(LIB_SOURCES)
-	$(CC) $(CFLAGS) $(LIB_FLAGS) -o multichannel ./multichannel.c $(LIB_SOURCES)
+	$(CC) $(CFLAGS) $(LIB_FLAGS) -o multichannel ./multichannel.c $(LIB_SOURCES) $(LIB_FLAGS)
 
 
-ifeq ($(findstring SPI,$(CFLAGS_RELEASE)),SPI)
-	$(CC) $(CFLAGS) $(LIB_FLAGS) -o multi ./multi_ranging.c $(LIB_SOURCES)
-endif
+# ifeq ($(findstring SPI,$(CFLAGS_RELEASE)),SPI)
+# 	$(CC) $(CFLAGS) $(LIB_FLAGS) -o multi ./multi_ranging.c $(LIB_SOURCES)
+# endif
 
 clean:
-	rm -f menu multi multichannel
+	rm -f multichannel
 # 	rm -f menu multi
