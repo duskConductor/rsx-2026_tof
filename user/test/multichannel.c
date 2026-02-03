@@ -45,7 +45,7 @@ const uint8_t I2C_ADDRESSES[] = {0x29, 0x2A, 0x2B, 0x2C};
 // Sensor names for CSV header
 const char *SENSOR_NAMES[] = {"Zwicky", "Aristotle", "Brahe", "Copernicus"};
 int sensor_fds[NUM_SENSORS];
-extern int i2c_fd;
+int i2c_fd;
 
 // Setting up the GPIO Lines
 struct gpiod_chip *chip;
@@ -148,6 +148,7 @@ void setup_gpio() {
         perror("Failed to open gpiochip0");
         exit(EXIT_FAILURE);
     }
+    printf("Successfully opened chip.\n");
 
     for (int i = 0; i < NUM_SENSORS; i++){
         lpn_lines[i] = gpiod_chip_get_line(chip, LPN_BCM_PINS[i]);
@@ -158,6 +159,8 @@ void setup_gpio() {
 
     // Ensure LED is originally off
     gpiod_line_request_output(led_line, "led", 0);
+
+    printf("Successfully set up gpio\n");
 }
 
 // Sets addresses and prepares sensors
@@ -180,12 +183,19 @@ void setup_sensors() {
         usleep(100000);
 
         // Open the I2C bus and store the descriptor in our global array
-        int fd = open(I2C_BUS_PATH, O_RDWR);
-        if (fd < 0) {
-            perror("Failed to open I2C bus");
+        sensor_fds[i] = open(I2C_BUS_PATH, O_RDWR);
+        
+        if (sensor_fds[i] < 0) {
+            perror("I2C Open Failed");
             cleanup();
         }
-        sensor_fds[i] = fd;
+
+        if (ioctl(sensor_fds[i], I2C_SLAVE, 0x29) < 0) {
+            perror("Failed to set I2C_SLAVE address");
+            cleanup();
+        }
+
+        i2c_fd = sensor_fds[i]; 
 
         // Default address is 0x29 (7-bit)
         sensors[i].platform.address = 0x52; 
@@ -198,15 +208,16 @@ void setup_sensors() {
         }
 
         // Change I2C addresses for Aristotle, Brahe, Copernicus
-        uint8_t new_address_8bit = I2C_ADDRESSES[i] << 1;
-        if (new_address_8bit != 0x52) {
-            status = vl53l8cx_set_i2c_address(&sensors[i], new_address_8bit);
-            if (status != VL53L8CX_STATUS_OK) {
-                printf("Sensor %d address change failed with status %d\n", i, status);
+        uint8_t new_addr = I2C_ADDRESSES[i] << 1;
+        if (new_addr != 0x52) {
+            status = vl53l8cx_set_i2c_address(&sensors[i], new_addr);
+            
+            sensors[i].platform.address = new_addr;
+
+            if (ioctl(sensor_fds[i], I2C_SLAVE, I2C_ADDRESSES[i]) < 0) {
+                perror("Failed to update the I2C_SLAVE address");
                 cleanup();
             }
-            // Update the platform struct with the new 8-bit address
-            sensors[i].platform.address = new_address_8bit;
         }
 
         // Set the device to 8x8
@@ -245,6 +256,7 @@ void run_scan(){
         // Turn them on sequentially; ensure they're not all
         // ranging at the same interval; helps prevent interference
         for (int i = 0; i < NUM_SENSORS; i++) {
+            i2c_fd = sensor_fds[i];
             vl53l8cx_start_ranging(&sensors[i]);
         }
 
@@ -279,7 +291,10 @@ void run_scan(){
                     }
                 }
             }
-            // Stop ranging to get a true "single-shot software sync"
+
+            // We're trying to do something called "single shot" where we manually turn each
+            // sensor on and off to prevent interference
+            i2c_fd = sensor_fds[i];
             vl53l8cx_stop_ranging(&sensors[i]);
         }
     }
