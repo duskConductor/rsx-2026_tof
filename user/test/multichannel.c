@@ -8,35 +8,38 @@
 #include <stdlib.h>
 
 #include <gpiod.h>
+#include <signal.h>
 
 #include "vl53l8cx_api.h"
 #include "platform.h"
 
 #define NUM_SENSORS 4
 
-// BCM GPIOs you provided (LP pins for each Pololu board)
+
+static volatile int g_stop = 0;
+
+
 static const int LPN_BCM_PINS[NUM_SENSORS] = {5, 6, 7, 8};
-
-// Target 7-bit I2C addresses for each sensor
 static const uint8_t I2C_ADDRESSES[NUM_SENSORS] = {0x29, 0x2A, 0x2B, 0x2C};
-
-// Names for logging / CSV header
 static const char *SENSOR_NAMES[NUM_SENSORS] = {"Zwicky", "Aristotle", "Brahe", "Copernicus"};
 
-// libgpiod objects
+
 static struct gpiod_chip *gpio_chip = NULL;
 static struct gpiod_line *lp_lines[NUM_SENSORS] = {0};
 
 typedef struct {
-    VL53L8CX_Configuration dev;  // ST driver configuration struct
-    uint8_t i2c_addr7;           // 7-bit I2C address (0x29..0x2C)
-    int lp_index;                // index into LPN_BCM_PINS / lp_lines
-    const char *name;            // sensor name
+    VL53L8CX_Configuration dev;
+    uint8_t i2c_addr7;
+    int lp_index;
+    const char *name;
 } Vl53l8cxSensor;
 
 static Vl53l8cxSensor sensors[NUM_SENSORS];
 
-// ------------ GPIO (LP) helpers using libgpiod ------------
+void sigint_handler (int sig) {
+    (void)sig;
+    g_stop = 1;
+}
 
 static int gpio_init_outputs(void)
 {
@@ -85,43 +88,43 @@ static void gpio_cleanup(void)
     }
 }
 
-// ------------ VL53L8CX per-sensor init / usage ------------
+static void stop_all_sensors(void){
+    for (int i = 0; i < NUM_SENSORS; ++i) {
+        vl53l8cx_stop_ranging(&sensors[i].dev);
+        gpio_set_lp(i, 0);
+    }
+    usleep(20000);
+}
 
 static int init_one_sensor(Vl53l8cxSensor *s, uint8_t new_addr7)
 {
     int status;
 
-    // Bring this sensor out of LP reset
     gpio_set_lp(s->lp_index, 1);
-    usleep(20000); // ~20 ms boot
+    usleep(20000); 
 
-    // Initialise comms for this instance (platform.c opens /dev/i2c-1
-    // and sets platform.address = 0x52, the default 8-bit address).
     status = vl53l8cx_comms_init(&s->dev.platform);
     if (status != 0) {
         printf("[%s] comms_init failed: %d\n", s->name, status);
         return status;
     }
 
-    // Initialise the sensor: firmware, basic checks, etc.
     status = vl53l8cx_init(&s->dev);
     if (status != VL53L8CX_STATUS_OK) {
         printf("[%s] vl53l8cx_init failed: %d\n", s->name, status);
         return status;
     }
 
-    // Assign a new I2C address (API takes 8-bit address).
     status = vl53l8cx_set_i2c_address(&s->dev, (uint16_t)(new_addr7 << 1));
     if (status != VL53L8CX_STATUS_OK) {
         printf("[%s] set_i2c_address failed: %d\n", s->name, status);
         return status;
     }
 
-    // Update platform address so platform.c uses the new address.
+
     s->dev.platform.address = (uint16_t)(new_addr7 << 1);
     s->i2c_addr7 = new_addr7;
 
-    // Example configuration: 8x8 resolution, 15 Hz.
     status = vl53l8cx_set_resolution(&s->dev, VL53L8CX_RESOLUTION_8X8);
     if (status != VL53L8CX_STATUS_OK) {
         printf("[%s] set_resolution failed: %d\n", s->name, status);
@@ -148,7 +151,6 @@ static int setup_all_sensors(void)
 {
     int status;
 
-    // Attach names and lp_index
     for (int i = 0; i < NUM_SENSORS; ++i) {
         sensors[i].lp_index = i;
         sensors[i].name = SENSOR_NAMES[i];
@@ -159,13 +161,11 @@ static int setup_all_sensors(void)
         return -1;
     }
 
-    // Hold all sensors in LP low (reset / I2C disabled)
     for (int i = 0; i < NUM_SENSORS; ++i) {
         gpio_set_lp(i, 0);
     }
-    usleep(10000);
+    usleep(20000);
 
-    // Bring up sensors one by one, assigning unique addresses
     for (int i = 0; i < NUM_SENSORS; ++i) {
         status = init_one_sensor(&sensors[i], I2C_ADDRESSES[i]);
         if (status != VL53L8CX_STATUS_OK) {
@@ -184,36 +184,37 @@ static void poll_all_sensors(void)
     uint8_t is_ready;
     int status;
 
-    // Simple CSV header using your SENSOR_NAMES
-    printf("name,address_hex,distance_mm\n");
+    for (int i = 0; i < NUM_SENSORS; ++i) {
+        status = vl53l8cx_check_data_ready(&sensors[i].dev, &is_ready);
+        if (status == VL53L8CX_STATUS_OK && is_ready) {
+            status = vl53l8cx_get_ranging_data(&sensors[i].dev, &results);
+            if (status == VL53L8CX_STATUS_OK) {
+                printf("[%s,0x%02X]\n",
+                        sensors[i].name,
+                        sensors[i].i2c_addr7);
 
-    while (1) {
-        for (int i = 0; i < NUM_SENSORS; ++i) {
-            status = vl53l8cx_check_data_ready(&sensors[i].dev, &is_ready);
-            if (status == VL53L8CX_STATUS_OK && is_ready) {
-                status = vl53l8cx_get_ranging_data(&sensors[i].dev, &results);
-                if (status == VL53L8CX_STATUS_OK) {
-                    // Example: just use zone 32 (rough center) for a quick demo.
-                    int16_t mm = results.distance_mm[32];
-                    printf("%s,0x%02X,%d\n",
-                           sensors[i].name,
-                           sensors[i].i2c_addr7,
-                           mm);
-                    fflush(stdout);
-                } else {
-                    printf("[%s] get_ranging_data failed: %d\n",
-                           sensors[i].name, status);
+                for (int y = 0; y < 8; ++y) {
+                    for (int x = 0; x < 8; ++x) {
+                        int idx = y * 8 + x;
+                        int16_t mm = results.distance_mm[idx];
+                        printf("%5d ", mm);
+                    }
+                    printf("\n");
                 }
+                printf("\n");
+                fflush(stdout);
+            } else {
+                printf("[%s] get_ranging_data failed: %d\n",
+                        sensors[i].name, status);
             }
         }
-        usleep(10000); // 10 ms
     }
 }
 
-// ------------ main ------------
-
 int main(void)
 {
+    signal(SIGINT, sigint_handler);
+
     int status = setup_all_sensors();
     if (status != VL53L8CX_STATUS_OK) {
         fprintf(stderr, "Failed to set up VL53L8CX sensors (status %d)\n", status);
@@ -221,8 +222,12 @@ int main(void)
         return 1;
     }
 
-    poll_all_sensors();  // never returns in this simple example
-
+    while (!g_stop) {
+        poll_all_sensors();
+        usleep(10000);
+    }
+    
+    stop_all_sensors();
     gpio_cleanup();
     return 0;
 }
