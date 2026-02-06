@@ -288,7 +288,7 @@ static int setup_all_sensors(void)
         for (int j = 0; j < NUM_SENSORS; ++j) {
             gpio_set_lp(j, (j == i) ? 1 : 0);
         }
-        usleep(20000);
+        usleep(100000);
         
         status = init_one_sensor(&sensors[i], I2C_ADDRESSES[i]);
         if (status != VL53L8CX_STATUS_OK) {
