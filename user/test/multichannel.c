@@ -267,18 +267,31 @@ static int setup_all_sensors(void)
         return -1;
     }
 
+    // Set all LP low initially
     for (int i = 0; i < NUM_SENSORS; ++i) {
         gpio_set_lp(i, 0);
     }
     usleep(20000);
 
     for (int i = 0; i < NUM_SENSORS; ++i) {
+        // Make sure only THIS senseor is high
+        for (int j = 0; j < NUM_SENSORS; ++j) {
+            gpio_set_lp(j, (j == i) ? 1 : 0);
+        }
+        usleep(20000);
+        
         status = init_one_sensor(&sensors[i], I2C_ADDRESSES[i]);
         if (status != VL53L8CX_STATUS_OK) {
             printf("Sensor %d (%s) init failed, status=%d\n",
                    i, sensors[i].name, status);
             return status;
         }
+
+        printf("Sensor %d (%s) OK at 0x%02X\n", i, sensors[i].name, sensors[i].i2c_addr7);
+    }
+
+    for (int i = 0; i < NUM_SENSORS; ++i) {
+        gpio_set_lp(i,1);
     }
 
     return VL53L8CX_STATUS_OK;
@@ -290,6 +303,8 @@ static void poll_all_sensors(void)
     uint8_t is_ready;
     int status;
 
+    static int frame_count[NUM_SENSORS] = 0;
+
     for (int i = 0; i < NUM_SENSORS; ++i) {
         status = vl53l8cx_check_data_ready(&sensors[i].dev, &is_ready);
         
@@ -297,6 +312,10 @@ static void poll_all_sensors(void)
             status = vl53l8cx_get_ranging_data(&sensors[i].dev, &results);
             
             if (status == VL53L8CX_STATUS_OK) {
+                frame_count[i]++;
+
+                printf("Frame %d from %s (total %d)\n", frame_count[i], sensors[i].name, frame_count[i]);
+
                 write_pointcloud(i, &results);
             } else {
                 printf("[%s] get_ranging_data failed: %d\n",

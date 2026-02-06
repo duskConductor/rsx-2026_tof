@@ -2,67 +2,113 @@ import pandas as pd
 import numpy as np
 import time
 import open3d as o3d
+import plotly.graph_objects as go
+from scipy.spatial import Delaunay
 
-CSV_FILENAME = "multichannel_lidar_scan.csv"
+CSV_FILENAME = "raw_pointcloud.csv"
 
-def animate_lidar(filename=CSV_FILENAME):
-    df = pd.read_csv(filename)
-    df = df[df["Dist_mm"] > 0]
+df = pd.read_csv(CSV_FILENAME)
 
-    vis = o3d.visualization.Visualizer()
-    vis.create_window(window_name="ToF Time-Series Animation", width=1280, height=720)
+def row_to_points(row):
+    xs, ys, zs = [], [], []
 
-    pcd = o3d.geometry.PointCloud()
-    vis.add_geometry(pcd)
+    for zone in range(1, 65):
+        status = row[f"zone{zone}_status"]
 
-    timestamps = sorted(df["Timestamp"].unique())
+        if status != 1:
+            continue
 
-    for ts in timestamps:
-        current_frame = df[df["Timestamp"] == ts]
-        points = current_frame[["X", "Y", "Z"]].values
+        xs.append(row[f"zone{zone}_x"])
+        ys.append(row[f"zone{zone}_y"])
+        zs.append(row[f"zone{zone}_z"])
 
-        signals = current_frame["Signal"].values
-        colours = np.zeros((len(signals), 3))
-        # Green: Max signal intensity
-        colours[:, 1] = signals / (signals.max() + 1e-6)
+        return np.array(xs), np.array(ys), np.array(zs)
 
-        pcd.points = o3d.utility.Vector3dVector(points)
-        pcd.colors = o3d.utility. Vector3dVector(colours)
+all_x, all_y, all_z = [], [], []
 
-        pcd = pcd.voxel_down_sample(voxel_size=10.0)
+for _, row in df.iterrows():
+    xs, ys, zs = row_to_points(row)
+    all_x.append(xs)
+    all_y.append(ys)
+    all_z.append(zs)
 
-        vis.update_geometry(pcd)
-        vis.poll_events()
-        vis.update_renderer()
 
-        time.sleep(0.05)
+all_x = np.concatenate(all_x)
+all_y = np.concatenate(all_y)
+all_z = np.concatenate(all_z)
 
-    vis.destroy_window()
+sensor_labels = []
 
-def visualize_lidar(filename=CSV_FILENAME):
-    df = pd.read_csv(filename)
-    df = df[df["Dist_mm"] > 0]
+for _, row in df.iterrows():
+    xs, ys, zs = row_to_points(row)
+    sensor_name = row["sensor"]
+    sensor_labels.extend([sensor_name] * len(xs))
 
-    points = df[["X", "Y", "Z"]].values
+# Doing colour on point cloud by sensor so I can double-check
+# whether the sensors are working correctly.
+sensor_labels = np.array(sensor_labels)
+sensor_ids = pd.Categorical(sensor_labels).codes
 
-    # Using Signal strength for color mapping
-    signals = df["Signal"].values
-    # Normalizing
-    norm_signals = (signals - signals.min()) / (signals.max() - signals.min())
+fig = go.Figure(
+    data=[
+        go.Scatter3d(
+            x=all_x,
+            y=all_y,
+            z=all_z,
+            mode="markers", 
+            marker=dict(
+                size=3,
+                color=sensor_ids,
+                colorscale="Turbo",
+                colorbar=dict(title="Sensor")
+            ),
+        )
+    ]
+)
 
-    colours = np.zeros((len(norm_signals), 3))
-    colours[:, 1] = norm_signals # Green: Stronger
-    colours[:, 0] = 1 - norm_signals # Red: Weaker
+fig.update_layout(
+    scene=dict(
+        xaxis_title="X (m)",
+        yaxis_title="Y (m)",
+        zaxis_title="Z (m)",
+        aspectmode="data",
+    ),
+    title="Combined point cloud (all sensors)"
+)
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    pcd.colors = o3d.utility.Vector3dVector(colours)
-    # Use voxels to clear up noise
-    pcd = pcd.voxel_down_sample(voxel_size=10.0)
+fig.show()
 
-    print(f"Visualizing {len(points)} points...")
-    o3d.visualization.draw_geometries([pcd], window_name="Please God don't just be a blob", width=1280, height=720)
+# --------------------------------------------------
 
-if __name__ == "__main__":
-    #animate_lidar()
-    visualize_lidar()
+points_xy = np.vstack([all_x, all_y]).T
+tri = Delaunay(points_xy)
+
+i, j, k = tri.simplices.T 
+
+fig = go.Figure(
+    data=[
+        go.Mesh3d(
+            x=all_x,
+            y=all_y,
+            z=all_z,
+            i=i,
+            j=j,
+            k=k,
+            color="lightblue",
+            opacity=0.50
+        )
+    ]
+)
+
+fig.update_layout(
+    scene=dict(
+        xaxis_title="X (m)",
+        yaxis_title="Y (m)",
+        zaxis_title="Z (m)",
+        aspectmode="data",
+    ),
+    title="Merged mesh from all sensors"
+)
+
+fig.show()
+
