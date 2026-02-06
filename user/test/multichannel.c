@@ -205,10 +205,14 @@ static int init_one_sensor(Vl53l8cxSensor *s, uint8_t new_addr7)
 {
     int status;
 
-    gpio_set_lp(s->lp_index, 1);
-    usleep(20000); 
+    // gpio_set_lp(s->lp_index, 1);
+    // usleep(20000); 
+    printf("[%s] About to init at default 0x52 (7-bit 0x29), LP index=%d\n",
+       s->name, s->lp_index);
 
     status = vl53l8cx_comms_init(&s->dev.platform);
+    printf("[%s] comms_init returned %d (platform.address=0x%02X)\n", s->name, status, s->dev.platform.address);
+
     if (status != 0) {
         printf("[%s] comms_init failed: %d\n", s->name, status);
         return status;
@@ -217,12 +221,15 @@ static int init_one_sensor(Vl53l8cxSensor *s, uint8_t new_addr7)
     status = vl53l8cx_init(&s->dev);
     if (status != VL53L8CX_STATUS_OK) {
         printf("[%s] vl53l8cx_init failed: %d\n", s->name, status);
+        vl53l8cx_comms_close(&s->dev.platform);
         return status;
     }
 
+    printf("[%s] Init OK, changing address to 0x%02X...\n", s->name, new_addr7);
     status = vl53l8cx_set_i2c_address(&s->dev, (uint16_t)(new_addr7 << 1));
     if (status != VL53L8CX_STATUS_OK) {
         printf("[%s] set_i2c_address failed: %d\n", s->name, status);
+        vl53l8cx_comms_close(&s->dev.platform);
         return status;
     }
 
@@ -233,23 +240,26 @@ static int init_one_sensor(Vl53l8cxSensor *s, uint8_t new_addr7)
     status = vl53l8cx_set_resolution(&s->dev, VL53L8CX_RESOLUTION_8X8);
     if (status != VL53L8CX_STATUS_OK) {
         printf("[%s] set_resolution failed: %d\n", s->name, status);
+        vl53l8cx_comms_close(&s->dev.platform);
         return status;
     }
 
     status = vl53l8cx_set_ranging_frequency_hz(&s->dev, 15);
     if (status != VL53L8CX_STATUS_OK) {
         printf("[%s] set_ranging_frequency failed: %d\n", s->name, status);
+        vl53l8cx_comms_close(&s->dev.platform);
         return status;
     }
 
     status = vl53l8cx_start_ranging(&s->dev);
     if (status != VL53L8CX_STATUS_OK) {
         printf("[%s] start_ranging failed: %d\n", s->name, status);
+        vl53l8cx_comms_close(&s->dev.platform);
         return status;
     }
 
     printf("[%s] initialised at 0x%02X\n", s->name, s->i2c_addr7);
-    set_status_led(1);
+    // set_status_led(1);
     return VL53L8CX_STATUS_OK;
 }
 
@@ -294,6 +304,8 @@ static int setup_all_sensors(void)
         gpio_set_lp(i,1);
     }
 
+    set_status_led(1);
+
     return VL53L8CX_STATUS_OK;
 }
 
@@ -303,7 +315,7 @@ static void poll_all_sensors(void)
     uint8_t is_ready;
     int status;
 
-    static int frame_count[NUM_SENSORS] = 0;
+    static int frame_count[NUM_SENSORS] = {0};
 
     for (int i = 0; i < NUM_SENSORS; ++i) {
         status = vl53l8cx_check_data_ready(&sensors[i].dev, &is_ready);
