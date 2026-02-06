@@ -1,11 +1,9 @@
-// multi_vl53l8cx.c
-// Compile e.g.:
-//   gcc multi_vl53l8cx.c platform.c vl53l8cx_api.c -lgpiod -o multi_vl53
-
 #include <stdio.h>
 #include <stdint.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <time.h>
+#include <math.h>
 
 #include <gpiod.h>
 #include <signal.h>
@@ -17,7 +15,6 @@
 #define STATUS_LED_BCM 9
 
 static volatile int g_stop = 0;
-
 
 static const int LPN_BCM_PINS[NUM_SENSORS] = {5, 6, 7, 8};
 static const uint8_t I2C_ADDRESSES[NUM_SENSORS] = {0x29, 0x2A, 0x2B, 0x2C};
@@ -35,11 +32,91 @@ typedef struct {
     const char *name;
 } Vl53l8cxSensor;
 
+typedef struct {
+    double x, y, z;
+    double yaw, pitch, roll;
+} SensorPose;
+
+static SensorPose poses[NUM_SENSORS] = {
+    // Zwicky (Top)
+    {0.00, 0.0684, 0.00, 0.0, 0.0, 0.0},
+    // Aristotle (Top-Middle)
+    {0.05, 0.0456, 0.00, 0.0, 0.0, 0.0},
+    // Brahe (Middle-Bottom)
+    {0.00, 0.0228, 0.00, 0.0, 0.0, 0.0},
+    // Copernicus (Bottom)
+    {0.05, 0.00, 0.00, 0.0, 0.0, 0.0}
+};
+
 static Vl53l8cxSensor sensors[NUM_SENSORS];
+static FILE *csv = NULL;
+
+static double now_seconds(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
 
 void sigint_handler (int sig) {
     (void)sig;
     g_stop = 1;
+}
+
+static void write_csv_header(void) {
+    fprintf(csv, "time,sensor");
+
+    for (int z = 0; z < 64; ++z){
+        fprintf(csv, ",zone%d_status,zone%d_x,zone%d_y,zone%d_z", z+1, z+1, z+1, z+1);
+    }
+
+    fprintf(csv, "\n");
+}
+
+static void write_pointcloud(int sensor_idx, const VL53L8CX_ResultsData *results) {
+    const double FOV_DEG = 45.0;
+    const double HALF_FOV = FOV_DEG / 2.0;
+    const double STEP = FOV_DEG / 8.0;
+    const double DEG_TO_RADIANS = M_PI / 180.0;
+
+    double t = now_seconds();
+    const Vl53l8cxSensor *s = &sensors[sensor_idx];
+    const SensorPose *pose = &poses[sensor_idx];
+
+    fprintf(csv, "%.9f,%s", t, s->name);
+
+    for (int idx = 0; idx < 64; ++idx) {
+        int16_t dist_mm = results->distance_mm[idx];
+        int status_zone = (dist_mm > 0) ? 1 : 0;
+
+        double xw = 0.0, yw = 0.0, zw = 0.0;
+
+        if (status_zone) {
+            int row = idx / 8;
+            int col = idx % 8;
+
+            double theta_x = (-HALF_FOV + STEP/2.0) + col * STEP;
+            double theta_y = ( HALF_FOV - STEP/2.0) - row * STEP;
+
+            double tx = theta_x * DEG_TO_RADIANS;
+            double ty = theta_y * DEG_TO_RADIANS;
+
+            double dist_m = 0.001 * dist_mm;
+            double z = dist_m;
+            double x = z * tan(tx);
+            double y = z * tan(ty);
+
+            // This is just translations
+            // I still need to add the rotation
+            xw = pose->x + x;
+            yw = pose->y + y;
+            zw = pose->z + z;
+        }
+
+        fprintf(csv, ",%d,%f,%f,%f", status_zone, xw, yw, zw);
+    }
+
+    fprintf(csv, "\n");
+    fflush(csv);
 }
 
 static int gpio_init_outputs(void)
@@ -215,23 +292,12 @@ static void poll_all_sensors(void)
 
     for (int i = 0; i < NUM_SENSORS; ++i) {
         status = vl53l8cx_check_data_ready(&sensors[i].dev, &is_ready);
+        
         if (status == VL53L8CX_STATUS_OK && is_ready) {
             status = vl53l8cx_get_ranging_data(&sensors[i].dev, &results);
+            
             if (status == VL53L8CX_STATUS_OK) {
-                printf("[%s,0x%02X]\n",
-                        sensors[i].name,
-                        sensors[i].i2c_addr7);
-
-                for (int y = 0; y < 8; ++y) {
-                    for (int x = 0; x < 8; ++x) {
-                        int idx = y * 8 + x;
-                        int16_t mm = results.distance_mm[idx];
-                        printf("%5d ", mm);
-                    }
-                    printf("\n");
-                }
-                printf("\n");
-                fflush(stdout);
+                write_pointcloud(i, &results);
             } else {
                 printf("[%s] get_ranging_data failed: %d\n",
                         sensors[i].name, status);
@@ -243,6 +309,14 @@ static void poll_all_sensors(void)
 int main(void)
 {
     signal(SIGINT, sigint_handler);
+
+    csv = fopen("raw_pointcloud.csv", "w");
+
+    if (!csv) {
+        perror("fopen csv");
+        return 1;
+    }
+    write_csv_header();
 
     int status = setup_all_sensors();
     if (status != VL53L8CX_STATUS_OK) {
@@ -257,6 +331,7 @@ int main(void)
     }
     
     stop_all_sensors();
+    fclose(csv);
     gpio_cleanup();
     return 0;
 }
